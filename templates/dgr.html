@@ -96,8 +96,7 @@
     </div>
 
     <script>
-        // Khi deploy lên Render, trang sẽ chạy trên HTTPS,
-        // do đó WebSocket phải dùng wss://
+        // Khi deploy lên Render (HTTPS), dùng wss:// để kết nối WebSocket bảo mật
         const HOST = window.location.hostname;
         const WS_URL = `wss://${HOST}/listen`;
 
