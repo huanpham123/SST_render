@@ -35,7 +35,6 @@ def index():
     """
     return render_template('dgr.html')
 
-
 @sockets.route('/listen')
 def listen_websocket(ws):
     """
@@ -127,14 +126,12 @@ def listen_websocket(ws):
         loop.close()
         print("--- Kết nối WebSocket đã đóng hoàn toàn ---")
 
-
 @app.route('/get_transcripts')
 def get_transcripts():
     """
     Nếu client cần lấy toàn bộ transcript tạm lưu (nếu có)
     """
     return jsonify(transcripts=transcripts)
-
 
 if __name__ == '__main__':
     """
