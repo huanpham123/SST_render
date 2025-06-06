@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Deepgram STT Tiếng Việt (Streaming)</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f4f4f4;
+            color: #333;
+        }
+        .container {
+            max-width: 800px;
+            margin: auto;
+            background: #fff;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #0056b3;
+            margin-bottom: 30px;
+        }
+        .controls {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        button {
+            padding: 12px 25px;
+            font-size: 1.1em;
+            cursor: pointer;
+            border: none;
+            border-radius: 5px;
+            color: #fff;
+            background-color: #007bff;
+            transition: background-color 0.3s ease;
+            margin: 5px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button#stopButton {
+            background-color: #dc3545;
+        }
+        button#stopButton:hover {
+            background-color: #bd2130;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        #status {
+            text-align: center;
+            margin-top: 15px;
+            font-weight: bold;
+            color: #555;
+        }
+        #transcript-output {
+            margin-top: 25px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            background-color: #e9ecef;
+            min-height: 150px;
+            max-height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        #transcript-output p {
+            margin-bottom: 5px;
+            line-height: 1.5;
+        }
+        #transcript-output p:last-child {
+            margin-bottom: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Deepgram STT Tiếng Việt (Streaming)</h1>
+
+        <div class="controls">
+            <button id="startButton">Bắt đầu ghi âm</button>
+            <button id="stopButton" disabled>Dừng ghi âm</button>
+        </div>
+        <div id="status">Chờ kết nối...</div>
+
+        <h3>Văn bản đã chuyển đổi:</h3>
+        <div id="transcript-output">
+            <p>Bắt đầu ghi âm và nói tiếng Việt để xem kết quả...</p>
+        </div>
+    </div>
+
+    <script>
+        // Khi deploy lên Render, trang sẽ chạy trên HTTPS,
+        // do đó WebSocket phải dùng wss://
+        const HOST = window.location.hostname;
+        const WS_URL = `wss://${HOST}/listen`;
+
+        const startButton = document.getElementById('startButton');
+        const stopButton = document.getElementById('stopButton');
+        const statusDiv = document.getElementById('status');
+        const transcriptOutput = document.getElementById('transcript-output');
+
+        let websocket;
+        let audioContext;
+        let mediaStreamSource;
+        let scriptProcessor;
+
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            alert('Trình duyệt của bạn không hỗ trợ ghi âm. Vui lòng sử dụng Chrome, Firefox, hoặc Edge.');
+            startButton.disabled = true;
+        }
+
+        startButton.onclick = async () => {
+            statusDiv.textContent = 'Đang yêu cầu quyền truy cập microphone...';
+            startButton.disabled = true;
+            stopButton.disabled = false;
+            transcriptOutput.innerHTML = '';
+
+            try {
+                // Yêu cầu quyền truy cập microphone
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                statusDiv.textContent = 'Đã có quyền truy cập microphone.';
+
+                // Tạo AudioContext với sampleRate 16000 (Deepgram yêu cầu 16kHz)
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                    sampleRate: 16000
+                });
+                mediaStreamSource = audioContext.createMediaStreamSource(stream);
+
+                // Tạo ScriptProcessorNode để nhận dữ liệu PCM
+                scriptProcessor = audioContext.createScriptProcessor(1024, 1, 1);
+                mediaStreamSource.connect(scriptProcessor);
+                scriptProcessor.connect(audioContext.destination);
+
+                // Kết nối WebSocket đến server (Flask trên Render)
+                websocket = new WebSocket(WS_URL);
+
+                websocket.onopen = () => {
+                    statusDiv.textContent = 'Đã kết nối với server. Bắt đầu nói...';
+                    console.log('WebSocket connection opened.');
+                };
+
+                websocket.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    if (data.transcript) {
+                        const p = document.createElement('p');
+                        p.textContent = data.transcript;
+                        transcriptOutput.appendChild(p);
+                        transcriptOutput.scrollTop = transcriptOutput.scrollHeight;
+                    }
+                };
+
+                websocket.onerror = (error) => {
+                    console.error('WebSocket Error:', error);
+                    statusDiv.textContent = 'Lỗi kết nối WebSocket.';
+                    stopRecording();
+                };
+
+                websocket.onclose = () => {
+                    console.log('WebSocket connection closed.');
+                    statusDiv.textContent = 'Kết nối WebSocket đã đóng.';
+                    stopRecording();
+                };
+
+                // Gửi dữ liệu audio (Int16) lên server
+                scriptProcessor.onaudioprocess = (event) => {
+                    if (websocket && websocket.readyState === WebSocket.OPEN) {
+                        const inputData = event.inputBuffer.getChannelData(0);
+                        const outputData = new Int16Array(inputData.length);
+                        for (let i = 0; i < inputData.length; i++) {
+                            // Chuyển float [-1,1] sang Int16
+                            outputData[i] = Math.max(-1, Math.min(1, inputData[i])) * 0x7FFF;
+                        }
+                        websocket.send(outputData.buffer);
+                    }
+                };
+
+            } catch (err) {
+                console.error('Lỗi khi truy cập microphone hoặc thiết lập:', err);
+                statusDiv.textContent = 'Không thể truy cập microphone hoặc thiết lập kết nối.';
+                startButton.disabled = false;
+                stopButton.disabled = true;
+            }
+        };
+
+        stopButton.onclick = () => {
+            stopRecording();
+        };
+
+        function stopRecording() {
+            if (websocket && websocket.readyState === WebSocket.OPEN) {
+                // Gửi "stop" để server ngắt kết nối với Deepgram
+                websocket.send("stop");
+                websocket.close();
+            }
+            if (scriptProcessor) {
+                scriptProcessor.disconnect();
+                scriptProcessor.onaudioprocess = null;
+            }
+            if (mediaStreamSource) {
+                mediaStreamSource.disconnect();
+            }
+            if (audioContext && audioContext.state !== 'closed') {
+                audioContext.close().then(() => console.log('AudioContext closed.'));
+            }
+
+            statusDiv.textContent = 'Đã dừng ghi âm.';
+            startButton.disabled = false;
+            stopButton.disabled = true;
+        }
+    </script>
+</body>
+</html>
